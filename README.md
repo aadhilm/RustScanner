@@ -3,7 +3,7 @@
 ![License](https://img.shields.io/badge/License-MIT-green)  
 ![Ethical Use](https://img.shields.io/badge/Ethical%20Use-Required-red)  
 
-**Net Scanner** is a powerful Python-based tool for network reconnaissance, designed to discover active hosts, open ports, and running services. Ideal for **penetration testers**, **sysadmins**, and **security enthusiasts**.  
+**RustScanner** is a powerful Python-based tool for network reconnaissance, designed to discover active hosts, open ports, and running services. Ideal for **penetration testers**, **sysadmins**, and **security enthusiasts**.  
 
 ⚠️ **Disclaimer**:  
 > This tool is for **authorized security testing only**. Unauthorized scanning may violate laws. Use responsibly!  
