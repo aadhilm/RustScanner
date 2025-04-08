@@ -1,9 +1,4 @@
 # RustScanner
-Here's a polished **README.md** for your **Net Scanner** project, following the structure of your **TERMINAL-TOOLS** example but tailored for a network scanning tool:
-
----
-
-# **Net Scanner**  
 ![Python](https://img.shields.io/badge/Python-3.8%2B-blue)  
 ![License](https://img.shields.io/badge/License-MIT-green)  
 ![Ethical Use](https://img.shields.io/badge/Ethical%20Use-Required-red)  
