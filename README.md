@@ -22,7 +22,6 @@ A lightweight yet robust network scanner that combines:
 - **Service detection** (Banner grabbing)  
 - **OS fingerprinting** (Nmap integration)  
 
-All in a **user-friendly CLI/GUI** interface.  
 
 ---
 
@@ -35,7 +34,15 @@ All in a **user-friendly CLI/GUI** interface.
 | **Reporting**        | Export results to CSV, JSON, TXT            |  
 | **Performance**      | Multi-threaded for faster scans             |  
 
+All in a **user-friendly CLI/GUI** interface.  
+
 ---
+
+### **System Integration**  
+- **Auto-detects** your Linux distro (Debian/Arch/Fedora)  
+- **Installs all dependencies** (Python packages + system tools)  
+- **Verifies installations** before execution
+  
 
 ## **📦 Installation**  
 ### **Prerequisites**  
@@ -53,12 +60,25 @@ cd net-scanner
 ```bash  
 chmod +x install.sh  
 ./install.sh  
+```
+```python
+python install.py  
 ```  
 
-**Manual Install:**  
-```bash  
-pip install -r requirements.txt  
-```  
+### ** Manual Installation (If Needed)**  
+```bash
+# For Debian/Ubuntu:
+sudo apt update && sudo apt install -y python3-pip arp-scan nmap
+pip3 install -r requirements.txt
+
+# For Arch:
+sudo pacman -Syu python-pip arp-scan nmap
+pip3 install -r requirements.txt
+
+# For Fedora:
+sudo dnf install python3-pip arp-scan nmap
+pip3 install -r requirements.txt
+```
 
 ### **3. Run Net Scanner**  
 ```bash  
