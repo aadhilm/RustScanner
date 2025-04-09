@@ -54,10 +54,10 @@ cd net-scanner
 **Automated Install:**  
 ```bash  
 chmod +x install.sh  
-./install.sh  
+./install.sh  or bash install.sh
 ```
 ```python
-python install.py  
+python3 install.py  
 ```  
 
 ### ** Manual Installation (If Needed)**  
