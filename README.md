@@ -11,6 +11,7 @@
 ---
 
 ## **🎯 Introduction**  
+NetScan is a powerful and versatile network scanning utility designed to help administrators, security professionals, and IT enthusiasts analyze and monitor their network environments efficiently.
 A lightweight yet robust network scanner that combines:  
 - **Host discovery** (ICMP/ARP/TCP SYN scans)  
 - **Port scanning** (SYN, Connect, UDP)  
