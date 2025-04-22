@@ -40,7 +40,8 @@
 git clone https://github.com/yourusername/RustScanner.git
 cd RustScanner
 chmod +x install.sh
-./install.sh  # Installs Python deps + EtherApe + Nmap
+bash install.sh  # Installs Python deps + EtherApe + Nmap
+python3 install.py
 ```
 
 ### **Manual Installation**  
@@ -61,29 +62,12 @@ pip3 install -r requirements.txt
 ---
 
 ## **💻 Usage**  
-### **1. CLI Mode**  
+### **Run Command**  
 ```bash
 # Basic scan
-python3 rustscanner.py --target 192.168.1.0/24
-
-# Advanced scan (SYN + OS detection)
-python3 rustscanner.py --target 10.0.0.1 --scan-type syn --os-detection
+sudo python3 main.py
 ```
 
-### **2. Web Interface**  
-```bash
-python3 webapp.py  # Starts at http://localhost:5000
-```
-![Web Interface Preview](https://i.imgur.com/example.png)  
-
-### **3. EtherApe Integration**  
-Visualize live traffic:  
-```bash
-sudo etherape -i eth0 -f "host 192.168.1.100"  # Filter specific host
-```
-![EtherApe Demo](https://i.imgur.com/example2.png)  
-
----
 
 ## **📊 Output Formats**  
 - **Terminal**: Color-coded results  
