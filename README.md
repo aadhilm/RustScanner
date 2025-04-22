@@ -95,20 +95,6 @@ sudo etherape -i eth0 -f "host 192.168.1.100"  # Filter specific host
 ## **📜 License**  
 MIT License. See [LICENSE](LICENSE).  
 
----
-
-## **🔗 Extras**  
-- **[REST API Docs](api.md)**  
-- **[Sample Reports](samples/)**  
-
-**Happy (ethical) hacking!** 🔍  
-
 --- 
 
-### **Key Additions**:  
-1. **Web Interface Section** - Added details about Flask dashboard  
-2. **EtherApe Integration** - Instructions for traffic visualization  
-3. **Screenshots** - Placeholder links for UI previews  
-4. **REST API** - Mentioned for automation  
-
-For actual screenshots, replace the placeholder Imgur links with your tool's images.
+**Happy (ethical) hacking!** 🔍  
