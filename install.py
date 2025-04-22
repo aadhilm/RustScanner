@@ -110,21 +110,21 @@ def print_package_status(package_status: List[Tuple[str, str, bool]]):
 def install_python_debian():
     print("Installing Python3 and related packages for Debian/Ubuntu...")
     run_command("sudo apt update && sudo apt upgrade -y")
-    run_command("sudo apt install -y python3-pip sqlitebrowser arp-scan nmap")
+    run_command("sudo apt install -y python3-pip sqlitebrowser arp-scan nmap etherape")
     run_command("pip3 install pyparsing six scapy networkx matplotlib psutil bcrypt paramiko speedtest-cli flask whois tk")
     print("\nInstallation complete for Debian/Ubuntu. Now run your Python scripts...!!!")
 
 def install_python_arch():
     print("Installing Python3 and related packages for Arch Linux...")
     run_command("sudo pacman -Syu --noconfirm")
-    run_command("sudo pacman -S --noconfirm python-pip sqlitebrowser arp-scan nmap")
+    run_command("sudo pacman -S --noconfirm python-pip sqlitebrowser arp-scan nmap etherape")
     run_command("pip3 install pyparsing six scapy networkx matplotlib psutil bcrypt paramiko speedtest-cli flask whois tk")
     print("\nInstallation complete for Arch Linux. Now run your Python scripts...!!!")
 
 def install_python_fedora():
     print("Installing Python3 and related packages for Fedora...")
     run_command("sudo dnf update -y")
-    run_command("sudo dnf install -y python3-pip sqlitebrowser arp-scan nmap")
+    run_command("sudo dnf install -y python3-pip sqlitebrowser arp-scan nmap etherape")
     run_command("pip3 install pyparsing six scapy networkx matplotlib psutil bcrypt paramiko speedtest-cli flask whois tk")
     print("\nInstallation complete for Fedora. Now run your Python scripts...!!!")
 
@@ -147,7 +147,8 @@ def verify_installation():
         "sqlitebrowser": "system",
         "arp-scan": "system",
         "nmap": "system",
-        
+        "etherape": "system",  # <== added here
+
         # Python packages (installed via pip)
         "scapy": "pip",
         "matplotlib": "pip",
