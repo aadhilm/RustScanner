@@ -56,7 +56,7 @@ print_package_status() {
     local pkg=$1
     local pkg_type=$2
     local installed=$3
-    
+
     if [ "$installed" -eq 0 ]; then
         printf "%-20s %-10s ${GREEN}%s${NC}\n" "$pkg" "$pkg_type" "INSTALLED"
     else
@@ -72,7 +72,8 @@ verify_installation() {
         ["sqlitebrowser"]="system"
         ["arp-scan"]="system"
         ["nmap"]="system"
-        
+        ["etherape"]="system"
+
         # Python packages
         ["scapy"]="pip"
         ["matplotlib"]="pip"
@@ -94,7 +95,7 @@ verify_installation() {
 
     for pkg in "${!packages_to_check[@]}"; do
         pkg_type="${packages_to_check[$pkg]}"
-        
+
         if [ "$pkg_type" == "system" ]; then
             is_system_package_installed "$pkg"
         else
@@ -107,7 +108,7 @@ verify_installation() {
 install_debian() {
     echo -e "${YELLOW}Installing Python3 and related packages for Debian/Ubuntu...${NC}"
     run_command "sudo apt update && sudo apt upgrade -y"
-    run_command "sudo apt install -y python3-pip sqlitebrowser arp-scan nmap"
+    run_command "sudo apt install -y python3-pip sqlitebrowser arp-scan nmap etherape"
     run_command "pip3 install pyparsing six scapy networkx matplotlib psutil bcrypt paramiko speedtest-cli flask whois"
     echo -e "\n${GREEN}Installation complete for Debian/Ubuntu. Now run your Python scripts...!!!${NC}"
 }
@@ -115,7 +116,7 @@ install_debian() {
 install_arch() {
     echo -e "${YELLOW}Installing Python3 and related packages for Arch Linux...${NC}"
     run_command "sudo pacman -Syu --noconfirm"
-    run_command "sudo pacman -S --noconfirm python-pip sqlitebrowser arp-scan nmap"
+    run_command "sudo pacman -S --noconfirm python-pip sqlitebrowser arp-scan nmap etherape"
     run_command "pip3 install pyparsing six scapy networkx matplotlib psutil bcrypt paramiko speedtest-cli flask whois"
     echo -e "\n${GREEN}Installation complete for Arch Linux. Now run your Python scripts...!!!${NC}"
 }
@@ -123,14 +124,14 @@ install_arch() {
 install_fedora() {
     echo -e "${YELLOW}Installing Python3 and related packages for Fedora...${NC}"
     run_command "sudo dnf update -y"
-    run_command "sudo dnf install -y python3-pip sqlitebrowser arp-scan nmap"
+    run_command "sudo dnf install -y python3-pip sqlitebrowser arp-scan nmap etherape"
     run_command "pip3 install pyparsing six scapy networkx matplotlib psutil bcrypt paramiko speedtest-cli flask whois"
     echo -e "\n${GREEN}Installation complete for Fedora. Now run your Python scripts...!!!${NC}"
 }
 
 main() {
     distro=$(detect_distro)
-    
+
     case $distro in
         "debian")
             install_debian
@@ -146,7 +147,7 @@ main() {
             exit 1
             ;;
     esac
-    
+
     verify_installation
     echo -e "\n${GREEN}All operations completed successfully! You can now use all the installed tools.${NC}"
 }
