@@ -20,22 +20,115 @@ import ssl
 import time
 import paramiko
 import sqlite3
+import queue
+import logging
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 from flask import Flask, render_template, request, jsonify
 
-# Database Initialization
+# Enable logging for debugging
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
+
+# Threading lock for database operations
+db_lock = threading.Lock()
+
 def init_db():
     conn = sqlite3.connect('network_scanner.db')
     c = conn.cursor()
+    
+    # Existing tables
     c.execute('''CREATE TABLE IF NOT EXISTS users
                  (username TEXT PRIMARY KEY, password TEXT, role TEXT)''')
     c.execute('''CREATE TABLE IF NOT EXISTS activity_logs
                  (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT, action TEXT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)''')
+    
+    # New tables
+    c.execute('''CREATE TABLE IF NOT EXISTS arp_scan
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  ip_address TEXT NOT NULL,
+                  mac_address TEXT,
+                  os_info TEXT,
+                  open_ports TEXT,
+                  timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)''')
+    
+    c.execute('''CREATE TABLE IF NOT EXISTS vulnerabilities
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  target TEXT NOT NULL,
+                  port INTEGER,
+                  port_state TEXT,
+                  service TEXT,
+                  version TEXT,
+                  timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)''')
+    
+    c.execute('''CREATE TABLE IF NOT EXISTS ssh_sessions
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  host TEXT NOT NULL,
+                  port INTEGER NOT NULL,
+                  username TEXT NOT NULL,
+                  command TEXT,
+                  output TEXT,
+                  timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)''')
+    
+    c.execute('''CREATE TABLE IF NOT EXISTS web_scans
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  url TEXT NOT NULL,
+                  scan_type TEXT NOT NULL,
+                  result TEXT,
+                  timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)''')
+    
+    c.execute('''CREATE TABLE IF NOT EXISTS firewall_ufw
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  action TEXT NOT NULL,
+                  port INTEGER NOT NULL,
+                  protocol TEXT NOT NULL,
+                  timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)''')
+    
     conn.commit()
     conn.close()
 
 init_db()
+
+
+def insert_arp_scan_result(ip_address, mac_address, os_info, open_ports):
+    conn = sqlite3.connect('network_scanner.db')
+    c = conn.cursor()
+    c.execute("INSERT INTO arp_scan (ip_address, mac_address, os_info, open_ports) VALUES (?, ?, ?, ?)",
+              (ip_address, mac_address, os_info, open_ports))
+    conn.commit()
+    conn.close()
+
+def insert_vulnerability_scan_result(target, port, port_state, service, version):
+    conn = sqlite3.connect('network_scanner.db')
+    c = conn.cursor()
+    c.execute("INSERT INTO vulnerabilities (target, port, port_state, service, version) VALUES (?, ?, ?, ?, ?)",
+              (target, port, port_state, service, version))
+    conn.commit()
+    conn.close()
+
+def insert_ssh_session_log(host, port, username, command, output):
+    conn = sqlite3.connect('network_scanner.db')
+    c = conn.cursor()
+    c.execute("INSERT INTO ssh_sessions (host, port, username, command, output) VALUES (?, ?, ?, ?, ?)",
+              (host, port, username, command, output))
+    conn.commit()
+    conn.close()
+
+def insert_web_scan_result(url, scan_type, result):
+    conn = sqlite3.connect('network_scanner.db')
+    c = conn.cursor()
+    c.execute("INSERT INTO web_scans (url, scan_type, result) VALUES (?, ?, ?)",
+              (url, scan_type, result))
+    conn.commit()
+    conn.close()
+
+def insert_ufw_rule(action, port, protocol):
+    conn = sqlite3.connect('network_scanner.db')
+    c = conn.cursor()
+    c.execute("INSERT INTO firewall_ufw (action, port, protocol) VALUES (?, ?, ?)",
+              (action, port, protocol))
+    conn.commit()
+    conn.close()
 
 # User Management Classes
 class UserManager:
@@ -74,6 +167,29 @@ class UserManager:
     def delete_user(self, username):
         self.c.execute("DELETE FROM users WHERE username=?", (username,))
         self.conn.commit()
+
+    def get_user_profile(self, username):
+        """Get user profile information."""
+        self.c.execute("SELECT username, role FROM users WHERE username=?", (username,))
+        user = self.c.fetchone()
+        if user:
+            return {"username": user[0], "role": user[1]}
+        return None
+    
+    def change_password(self, username, old_password, new_password):
+        """Change a user's password after verifying the old password."""
+        user = self.authenticate_user(username, old_password)
+        if not user:
+            return False, "Old password is incorrect."
+        
+        # Validate new password
+        if len(new_password) < 8:
+            return False, "Password must be at least 8 characters long."
+        
+        hashed_password = self.hash_password(new_password)
+        self.c.execute("UPDATE users SET password=? WHERE username=?", (hashed_password, username))
+        self.conn.commit()
+        return True, "Password changed successfully."
 
 class ActivityLogger:
     def __init__(self):
@@ -249,6 +365,22 @@ class NetworkScanner(tk.Tk):
         self.web_interface = WebInterface(self)
         self.start_web_interface()
 
+        # Fetch user data from the database
+        self.user_manager.c.execute("SELECT * FROM users WHERE username=?", (self.logged_in_user,))
+        user_data = self.user_manager.c.fetchone()
+        if user_data:
+            user_data = {"username": user_data[0], "password": user_data[1], "role": user_data[2]}
+        else:
+            user_data = {}
+
+        # If the user is a guest, disable certain features
+        if user_data.get("role") == "guest":
+            # Disable buttons for features that guests should not access
+            for widget in self.winfo_children():
+                if isinstance(widget, ttk.Button):
+                    if widget["text"] in ["Advanced Visualize Topology", "SSH Connect", "Export Results", "Clear Output"]:
+                        widget.config(state="disabled")
+
     def start_web_interface(self):
         """Start the Flask web interface in a separate thread."""
         if self.web_interface:
@@ -285,6 +417,18 @@ class NetworkScanner(tk.Tk):
         # Right panel: System Info, Bandwidth Monitoring, and Vulnerability Scanning
         right_frame = ttk.Frame(main_frame, width=250)
         right_frame.pack(side="right", fill="y", padx=10, pady=10)
+
+        # Profile and Logout buttons frame (top-right corner)
+        top_right_frame = ttk.Frame(right_frame)
+        top_right_frame.pack(fill="x", pady=5)
+        
+        # Add Profile button
+        ttk.Button(top_right_frame, text="Profile", command=self.view_profile).pack(side="right", padx=5, pady=5)
+
+         # Log Out Button (top-right corner)
+        logout_frame = ttk.Frame(right_frame)
+        logout_frame.pack(fill="x", pady=5)
+        ttk.Button(logout_frame, text="Log Out", command=self.log_out).pack(side="right", padx=5, pady=5)
 
         # System Info
         system_info_frame = ttk.Frame(right_frame, padding=10)
@@ -335,7 +479,14 @@ class NetworkScanner(tk.Tk):
         else:
             user_data = {}
 
-        if user_data.get("role") == "admin":
+        # If the user is a guest, disable certain features
+        if user_data.get("role") == "guest":
+            # Disable buttons for features that guests should not access
+            for widget in control_frame.winfo_children():
+                if isinstance(widget, ttk.Button):
+                    if widget["text"] in ["Advanced Visualize Topology", "SSH Connect", "Export Results", "Clear Output"]:
+                        widget.config(state="disabled")
+        elif user_data.get("role") == "admin":
             ttk.Button(control_frame, text="User Management", command=self.open_user_management).pack(fill="x", pady=5)
         
     def update_bandwidth_graph(self, time_data, usage_data):
@@ -360,6 +511,12 @@ class NetworkScanner(tk.Tk):
             text.set_color("white")
         # Redraw the canvas
         self.bandwidth_canvas.draw()
+
+
+    def view_profile(self):
+        """Open the profile window for the current user."""
+        if self.logged_in_user:
+            ProfileWindow(self, self.logged_in_user)
 
     def start_bandwidth_monitor(self):
         """Start bandwidth monitoring."""
@@ -427,8 +584,9 @@ class NetworkScanner(tk.Tk):
 
         ttk.Button(scrollable_frame, text="Start Scan", command=self.start_scan).pack(fill="x", pady=5)
         ttk.Button(scrollable_frame, text="Stop Scan", command=self.stop_scan).pack(fill="x", pady=5)
-
+        ttk.Button(scrollable_frame, text="Basic Scan [ARP]", command=self.run_arp_scan).pack(fill="x", pady=5)
         ttk.Label(scrollable_frame, text="Advance Scanning", font=("Helvetica", 12, "bold")).pack(pady=10)
+
         ttk.Label(scrollable_frame, text="Target IP/Host:").pack(anchor="w", pady=5)
         self.vuln_target_entry = ttk.Entry(scrollable_frame, width=20)
         self.vuln_target_entry.insert(0, "192.168.1")
@@ -448,11 +606,118 @@ class NetworkScanner(tk.Tk):
         ttk.Button(scrollable_frame, text="SSH Connect", command=self.open_ssh_connection).pack(fill="x", pady=5)
         ttk.Button(scrollable_frame, text="Export Results", command=self.export_results).pack(fill="x", pady=5)
         ttk.Button(scrollable_frame, text="Clear Output", command=self.clear_all).pack(fill="x", pady=5)
+
+        # If the user is a guest, disable certain features
+        if self.logged_in_user == "guest":
+            for widget in scrollable_frame.winfo_children():
+                if isinstance(widget, ttk.Button):
+                    if widget["text"] in ["Advanced Visualize Topology", "SSH Connect", "Export Results", "Clear Output"]:
+                        widget.config(state="disabled")
+
+     # Add UFW Management Button (only for admin users)
+        if self.logged_in_user == "admin":
+            ttk.Button(scrollable_frame, text="FrieWall", command=self.open_ufw_management).pack(fill="x", pady=5)
         
+        # Enable/disable features based on user role
+        self.update_ui_for_user_role()
+
+    def open_ufw_management(self):
+        """Open the UFW management window."""
+        UFWManagementWindow(self)
+
+    def log_out(self):
+        """Log out the current user and return to the login screen."""
+        # Log the logout action
+        self.activity_logger.log_activity(self.logged_in_user, "logged out")
+
+        # Reset the logged-in user
+        self.logged_in_user = None
+
+        # Clear sensitive data (optional)
+        self.output_text.config(state="normal")
+        self.output_text.delete("1.0", tk.END)
+        self.output_text.config(state="disabled")
+        self.device_listbox.delete(0, tk.END)
+
+        # Stop any ongoing processes (e.g., bandwidth monitoring, scans)
+        self.stop_bandwidth_monitor()
+        self.stop_scan()
+
+        # Destroy all widgets and recreate them
+        for widget in self.winfo_children():
+            widget.destroy()
+        
+        # Hide the main window and show the login window
+        self.withdraw()
+        self.login_window = LoginWindow(self)
+        self.login_window.deiconify()
+
+    def update_ui_for_user_role(self):
+        """Update the UI based on the current user's role."""
+        if not hasattr(self, 'logged_in_user'):
+            return
+            
+        # Fetch user role from database
+        self.user_manager.c.execute("SELECT role FROM users WHERE username=?", (self.logged_in_user,))
+        result = self.user_manager.c.fetchone()
+        role = result[0] if result else "guest"
+        
+        # Define which buttons should be disabled for guests
+        restricted_buttons = [
+            "Advanced Visualize Topology",
+            "SSH Connect",
+            "Export Results",
+            "Clear Output",
+            "FrieWall",
+            "User Management"
+        ]
+        
+        # Enable/disable buttons based on role
+        for widget in self.winfo_children():
+            if isinstance(widget, ttk.Button):
+                if widget["text"] in restricted_buttons:
+                    widget.config(state="normal" if role == "admin" else "disabled")
+
+    def run_arp_scan(self):
+        """Run an ARP scan to discover devices on the local network."""
+        self.append_output("Starting ARP scan...\n")
+
+        def perform_arp_scan():
+            try:
+                result = subprocess.run(
+                    ["arp-scan", "--localnet"],  # Scan the local network
+                    capture_output=True,
+                    text=True
+                )
+
+                if result.returncode == 0:
+                    # Parse the output and display it
+                    self.append_output("ARP Scan Results:\n")
+                    self.append_output(result.stdout)
+
+                    # Save results to the database
+                    for line in result.stdout.splitlines():
+                        if re.match(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}", line):  # Match IP addresses
+                            parts = line.split()
+                            ip_address = parts[0]
+                            mac_address = parts[1]
+                            os_info = " ".join(parts[2:]) if len(parts) > 2 else "Unknown"
+                            insert_arp_scan_result(ip_address, mac_address, os_info, "N/A")  # Open ports not available in ARP scan
+                else:
+                    self.append_output(f"Error during ARP scan: {result.stderr}\n")
+            except FileNotFoundError:
+                self.append_output("Error: arp-scan is not installed on your system.\n")
+            except Exception as e:
+                self.append_output(f"Error during ARP scan: {e}\n")
+
+        # Run ARP scan in a separate thread
+        threading.Thread(target=perform_arp_scan).start()
 
     def open_ssh_connection(self):
-        """Open the SSH connection window."""
-        SSHConnectionWindow(self)
+        if self.logged_in_user == "guest":
+            messagebox.showinfo("Info", "Guest users do not have access to SSH connections.")
+        else:
+            SSHConnectionWindow(self)
 
     def traceroute_device(self):
         """Perform a traceroute to the specified target."""
@@ -691,47 +956,55 @@ class NetworkScanner(tk.Tk):
         plt.show()
 
     def advanced_visualize_network(self):
-        """Launch EtherApe for network visualization."""
-        self.append_output("Launching EtherApe for network visualization...\n")
-        try:
-            # Launch EtherApe with elevated privileges
-            if os.system("which etherape > /dev/null") == 0:
-                os.system("sudo etherape &")
-            else:
-                self.append_output("Error: EtherApe is not installed on your system.\n")
-        except Exception as e:
-            self.append_output(f"Error launching EtherApe: {e}\n")
+        if self.logged_in_user == "guest":
+            messagebox.showinfo("Info", "Guest users do not have access to advanced network visualization.")
+        else:
+            self.append_output("Launching EtherApe for network visualization...\n")
+            try:
+                # Launch EtherApe with elevated privileges
+                if os.system("which etherape > /dev/null") == 0:
+                    os.system("sudo etherape &")
+                else:
+                    self.append_output("Error: EtherApe is not installed on your system.\n")
+            except Exception as e:
+                self.append_output(f"Error launching EtherApe: {e}\n")
 
     def export_results(self):
-        """Export scan output and active devices to a text file."""
-        filename = f"network_scan_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
-        try:
-            with open(filename, "w") as file:
-                file.write("Scan Output:\n")
-                file.write(self.output_text.get("1.0", tk.END))
-                file.write("\nActive Devices:\n")
-                for i in range(self.device_listbox.size()):
-                    file.write(self.device_listbox.get(i) + "\n")
+        if self.logged_in_user == "guest":
+            messagebox.showinfo("Info", "Guest users do not have access to export results.")
+        else:
+            filename = f"network_scan_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+            try:
+                with open(filename, "w") as file:
+                    file.write("Scan Output:\n")
+                    file.write(self.output_text.get("1.0", tk.END))
+                    file.write("\nActive Devices:\n")
+                    for i in range(self.device_listbox.size()):
+                        file.write(self.device_listbox.get(i) + "\n")
 
-            messagebox.showinfo("Export Successful", f"Results exported to {filename}")
-        except Exception as e:
-            messagebox.showerror("Export Failed", f"Failed to export results: {e}")
-
+                messagebox.showinfo("Export Successful", f"Results exported to {filename}")
+            except Exception as e:
+                messagebox.showerror("Export Failed", f"Failed to export results: {e}")
 
     def clear_all(self):
-        """Clear both the active devices list and the scan output."""
-        # Clear the active devices list
-        self.device_listbox.delete(0, tk.END)
+        if self.logged_in_user == "guest":
+            messagebox.showinfo("Info", "Guest users do not have access to clear the output.")
+        else:
+            # Clear the active devices list
+            self.device_listbox.delete(0, tk.END)
 
-        # Clear the scan output
-        self.output_text.config(state="normal")
-        self.output_text.delete("1.0", tk.END)
-        self.output_text.config(state="disabled")
+            # Clear the scan output
+            self.output_text.config(state="normal")
+            self.output_text.delete("1.0", tk.END)
+            self.output_text.config(state="disabled")
 
-        self.append_output("All data cleared.\n")
+            self.append_output("All data cleared.\n")
 
     def open_web_scanner(self):
-        WebScannerWindow(self)
+        if self.logged_in_user == "guest":
+            messagebox.showinfo("Info", "Guest users do not have access to the Web Scanner.")
+        else:
+            WebScannerWindow(self)
 
     def start_bandwidth_monitor(self):
         """Start bandwidth monitoring."""
@@ -744,24 +1017,38 @@ class NetworkScanner(tk.Tk):
         self.append_output("Bandwidth monitoring stopped.\n")
 
     def run_vulnerability_scan(self):
-        """Run a vulnerability scan on the specified target."""
-        target = self.vuln_target_entry.get()
-        if not target:
-            self.append_output("No target specified for vulnerability scan.\n")
-            return
+        if self.logged_in_user == "guest":
+            messagebox.showinfo("Info", "Guest users do not have access to vulnerability scans.")
+        else:
+            target = self.vuln_target_entry.get()
+            if not target:
+                self.append_output("No target specified for vulnerability scan.\n")
+                return
 
-        self.append_output(f"Starting vulnerability scan on {target}...\nwait for few minutes...\n\n")
-        self.vulnerability_scanner = VulnerabilityScanner(target)
-        threading.Thread(target=self.perform_vulnerability_scan).start()
+            self.append_output(f"Starting vulnerability scan on {target}...\nwait for few minutes...\n\n")
+            self.vulnerability_scanner = VulnerabilityScanner(target)
+            threading.Thread(target=self.perform_vulnerability_scan).start()
 
     def perform_vulnerability_scan(self):
         """Perform the vulnerability scan and display the results."""
         try:
             result = self.vulnerability_scanner.scan()
             self.append_output(f"Vulnerability Scan Results:\n{result}\n")
+
+            # Parse and save results to the database
+            for line in result.splitlines():
+                if "PORT" in line or "STATE" in line or "SERVICE" in line:
+                    continue  # Skip headers
+                if re.match(r"^\d+/tcp", line):  # Match port lines
+                    parts = line.split()
+                    port = parts[0].split("/")[0]
+                    port_state = parts[1]
+                    service = parts[2]
+                    version = " ".join(parts[3:]) if len(parts) > 3 else "Unknown"
+                    insert_vulnerability_scan_result(self.vuln_target_entry.get(), port, port_state, service, version)
         except Exception as e:
             self.append_output(f"Error during vulnerability scan: {e}\n")
-    
+        
     def open_user_management(self):
         """Open the user management window if the logged-in user is an admin."""
         # Fetch user data from the database
@@ -777,6 +1064,126 @@ class NetworkScanner(tk.Tk):
             UserManagementWindow(self)
         else:
             messagebox.showerror("Access Denied", "You do not have permission to access this section.")
+
+class ProfileWindow(tk.Toplevel):
+    def __init__(self, master, username):
+        super().__init__(master)
+        self.title("User Profile")
+        self.geometry("400x300")
+        self.configure(bg="#1e1e2f")
+
+        self.style = ttk.Style(self)
+        self.style.configure("TLabel", foreground="#ffffff", background="#1e1e2f")
+        self.style.configure("TButton", background="#3e3e56", foreground="#ffffff")
+
+        self.user_manager = UserManager()
+        self.username = username
+        self.setup_ui()
+
+    def setup_ui(self):
+        # Get user profile data
+        profile = self.user_manager.get_user_profile(self.username)
+        
+        if not profile:
+            ttk.Label(self, text="Profile not found").pack(pady=20)
+            return
+
+        # Profile information frame
+        info_frame = ttk.Frame(self)
+        info_frame.pack(pady=20, padx=20, fill="x")
+
+        ttk.Label(info_frame, text="Username:", font=("Helvetica", 12, "bold")).grid(row=0, column=0, sticky="w", pady=5)
+        ttk.Label(info_frame, text=profile["username"], font=("Helvetica", 12)).grid(row=0, column=1, sticky="w", pady=5)
+
+        ttk.Label(info_frame, text="Role:", font=("Helvetica", 12, "bold")).grid(row=1, column=0, sticky="w", pady=5)
+        ttk.Label(info_frame, text=profile["role"], font=("Helvetica", 12)).grid(row=1, column=1, sticky="w", pady=5)
+
+        # Activity logs frame
+        logs_frame = ttk.LabelFrame(self, text="Recent Activity", padding=10)
+        logs_frame.pack(pady=10, padx=20, fill="both", expand=True)
+
+        # Get recent activity logs
+        conn = sqlite3.connect('network_scanner.db')
+        c = conn.cursor()
+        c.execute("SELECT action, timestamp FROM activity_logs WHERE username=? ORDER BY timestamp DESC LIMIT 5", (self.username,))
+        logs = c.fetchall()
+        conn.close()
+
+        if logs:
+            for i, (action, timestamp) in enumerate(logs):
+                ttk.Label(logs_frame, text=f"{timestamp}: {action}").pack(anchor="w")
+        else:
+            ttk.Label(logs_frame, text="No recent activity").pack()
+
+        # Buttons frame
+        buttons_frame = ttk.Frame(self)
+        buttons_frame.pack(pady=10)
+        
+        ttk.Button(buttons_frame, text="Change Password", command=self.open_change_password).pack(side="left", padx=5)
+        ttk.Button(buttons_frame, text="Close", command=self.destroy).pack(side="right", padx=5)
+
+    def open_change_password(self):
+        """Open the change password dialog."""
+        ChangePasswordWindow(self)
+
+class ChangePasswordWindow(tk.Toplevel):
+    def __init__(self, master):
+        super().__init__(master)
+        self.title("Change Password")
+        self.geometry("400x250")
+        self.configure(bg="#1e1e2f")
+
+        self.style = ttk.Style(self)
+        self.style.configure("TLabel", foreground="#ffffff", background="#1e1e2f")
+        self.style.configure("TButton", background="#3e3e56", foreground="#ffffff")
+
+        self.user_manager = UserManager()
+        self.setup_ui()
+
+    def setup_ui(self):
+        ttk.Label(self, text="Current Password:").pack(pady=5)
+        self.current_password_entry = ttk.Entry(self, show="*")
+        self.current_password_entry.pack(pady=5)
+
+        ttk.Label(self, text="New Password:").pack(pady=5)
+        self.new_password_entry = ttk.Entry(self, show="*")
+        self.new_password_entry.pack(pady=5)
+
+        ttk.Label(self, text="Confirm New Password:").pack(pady=5)
+        self.confirm_password_entry = ttk.Entry(self, show="*")
+        self.confirm_password_entry.pack(pady=5)
+
+        ttk.Button(self, text="Change Password", command=self.change_password).pack(pady=10)
+        ttk.Button(self, text="Cancel", command=self.destroy).pack(pady=5)
+
+    def change_password(self):
+        current_password = self.current_password_entry.get()
+        new_password = self.new_password_entry.get()
+        confirm_password = self.confirm_password_entry.get()
+
+        if not current_password or not new_password or not confirm_password:
+            messagebox.showerror("Error", "All fields are required.")
+            return
+
+        if new_password != confirm_password:
+            messagebox.showerror("Error", "New passwords do not match.")
+            return
+
+        if len(new_password) < 8:
+            messagebox.showerror("Error", "Password must be at least 8 characters long.")
+            return
+
+        success, message = self.user_manager.change_password(
+            self.master.username,
+            current_password,
+            new_password
+        )
+
+        if success:
+            messagebox.showinfo("Success", message)
+            self.destroy()
+        else:
+            messagebox.showerror("Error", message)
 
 class WebScannerWindow(tk.Toplevel):
     def __init__(self, master):
@@ -810,7 +1217,7 @@ class WebScannerWindow(tk.Toplevel):
         ttk.Button(button_frame, text="SSL Certificate Info", command=self.ssl_certificate_info).pack(side="left", padx=5)
         ttk.Button(button_frame, text="Track Route", command=self.track_route).pack(side="left", padx=5)
         ttk.Button(button_frame, text="Export Results", command=self.export_results).pack(side="left", padx=5)
-
+        ttk.Button(button_frame, text="Clear Screen", command=self.clear_screen).pack(side="left", padx=5)
         # Output Text
         self.output_text = tk.Text(self, wrap="word", height=18, bg="#1e1e2f", fg="#00ff7f", font=("Courier", 12))
         self.output_text.pack(pady=5, fill="both", expand=True)
@@ -818,11 +1225,65 @@ class WebScannerWindow(tk.Toplevel):
     def scan_website(self):
         url = self.url_entry.get()
         self.output_text.insert(tk.END, f"Scanning website {url}...\n")
+        
+        domain = url.replace('http://', '').replace('https://', '').replace('www.', '').split('/')[0]
+        
+        # Try different methods in sequence
+        methods = [
+            self._whois_socket_method,
+            self._whois_api_method,
+            self._whois_command_line
+        ]
+        
+        for method in methods:
+            try:
+                result = method(domain)
+                if result:
+                    self.output_text.insert(tk.END, f"WHOIS Info:\n{result}\n")
+                    insert_web_scan_result(url, "WHOIS Info", result)
+                    return
+            except Exception as e:
+                continue
+        
+        self.output_text.insert(tk.END, "Could not retrieve WHOIS information using any method\n")
+        self.output_text.insert(tk.END, "Please visit https://who.is for manual lookup\n")
+
+    def _whois_socket_method(self, domain):
+        """Method 1: Direct socket connection to WHOIS server"""
+        tld = domain.split('.')[-1]
+        whois_server = {
+            'com': 'whois.verisign-grs.com',
+            'net': 'whois.verisign-grs.com',
+            'org': 'whois.pir.org',
+            'io': 'whois.nic.io',
+        }.get(tld, f'whois.nic.{tld}')
+        
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.connect((whois_server, 43))
+            s.send(f"{domain}\r\n".encode())
+            response = b''
+            while True:
+                data = s.recv(4096)
+                if not data:
+                    break
+                response += data
+        return response.decode('utf-8', errors='ignore')
+
+    def _whois_api_method(self, domain):
+        """Method 2: Public WHOIS API"""
+        response = requests.get(f"https://www.whois.com/whois/{domain}", timeout=10)
+        if response.status_code == 200:
+            return response.text[:5000]  # Limit to first 5000 characters
+        return None
+
+    def _whois_command_line(self, domain):
+        """Method 3: System whois command"""
         try:
-            domain_info = whois.whois(url)
-            self.output_text.insert(tk.END, f"Domain Info:\n{domain_info}\n")
-        except Exception as e:
-            self.output_text.insert(tk.END, f"Error scanning website: {e}\n")
+            result = subprocess.run(['whois', domain], capture_output=True, text=True, timeout=10)
+            if result.returncode == 0:
+                return result.stdout
+        except:
+            return None
 
     def check_open_ports(self):
         url = self.url_entry.get()
@@ -889,12 +1350,16 @@ class WebScannerWindow(tk.Toplevel):
             messagebox.showinfo("Export Successful", f"Results exported to {filename}")
         except Exception as e:
             messagebox.showerror("Export Failed", f"Failed to export results: {e}")
-
+            
+    def clear_screen(self):
+        """Clear the output text area."""
+        self.output_text.config(state="normal")
+        self.output_text.delete("1.0", tk.END)
+        self.output_text.config(state="disabled")
 
 class SSHConnectionWindow(tk.Toplevel):
     def __init__(self, master):
         super().__init__(master)
-
         self.title("SSH Connection")
         self.geometry("700x400")  # Increased height to accommodate new features
         self.configure(bg="#1e1e2f")
@@ -921,24 +1386,24 @@ class SSHConnectionWindow(tk.Toplevel):
         self.host_entry.insert(0, "192.168.1")
         self.host_entry.grid(row=1, column=0, padx=5, pady=5)
 
-        # Port
+        # Port Selection (Radio Buttons)
         ttk.Label(input_frame, text="Port:").grid(row=0, column=1, padx=5, pady=5, sticky="w")
-        self.port_entry = ttk.Entry(input_frame, width=10)
-        self.port_entry.insert(0, "22/8022")  # Default SSH port
-        self.port_entry.grid(row=1, column=1, padx=5, pady=5)
+        self.port_var = tk.IntVar(value=22)  # Default port is 22
+        ttk.Radiobutton(input_frame, text="22", variable=self.port_var, value=22).grid(row=1, column=1, padx=5, pady=5, sticky="w")
+        ttk.Radiobutton(input_frame, text="8022", variable=self.port_var, value=8022).grid(row=1, column=2, padx=5, pady=5, sticky="w")
 
         # Username
-        ttk.Label(input_frame, text="Username:").grid(row=0, column=2, padx=5, pady=5, sticky="w")
+        ttk.Label(input_frame, text="Username:").grid(row=0, column=3, padx=5, pady=5, sticky="w")
         self.username_entry = ttk.Entry(input_frame, width=20)
-        self.username_entry.grid(row=1, column=2, padx=5, pady=5)
+        self.username_entry.grid(row=1, column=3, padx=5, pady=5)
 
         # Password
-        ttk.Label(input_frame, text="Password:").grid(row=0, column=3, padx=5, pady=5, sticky="w")
+        ttk.Label(input_frame, text="Password:").grid(row=0, column=4, padx=5, pady=5, sticky="w")
         self.password_entry = ttk.Entry(input_frame, width=20, show="*")
-        self.password_entry.grid(row=1, column=3, padx=5, pady=5)
+        self.password_entry.grid(row=1, column=4, padx=5, pady=5)
 
         # Connect Button
-        ttk.Button(input_frame, text="Connect", command=self.connect_ssh).grid(row=1, column=4, padx=10, pady=5)
+        ttk.Button(input_frame, text="Connect", command=self.connect_ssh).grid(row=1, column=5, padx=10, pady=5)
 
         # Command Execution Frame
         command_frame = ttk.Frame(self)
@@ -958,7 +1423,7 @@ class SSHConnectionWindow(tk.Toplevel):
     def connect_ssh(self):
         """Connect to the remote server using SSH."""
         host = self.host_entry.get()
-        port = int(self.port_entry.get())
+        port = self.port_var.get()  # Get the selected port from the radio button
         username = self.username_entry.get()
         password = self.password_entry.get()
 
@@ -997,6 +1462,9 @@ class SSHConnectionWindow(tk.Toplevel):
                 self.output_text.insert(tk.END, f"Command Output:\n{output}\n")
             if errors:
                 self.output_text.insert(tk.END, f"Command Errors:\n{errors}\n")
+
+            # Save SSH session log to the database
+            insert_ssh_session_log(self.host_entry.get(), self.port_var.get(), self.username_entry.get(), command, output + errors)
         except Exception as e:
             self.output_text.insert(tk.END, f"Error executing command: {e}\n")
 
@@ -1081,6 +1549,114 @@ class WebInterface:
 
     def run(self, host="0.0.0.0", port=5000):
         self.app.run(host=host, port=port)
+
+class UFWManagementWindow(tk.Toplevel):
+    def __init__(self, master):
+        super().__init__(master)
+        self.title("UFW Management")
+        self.geometry("600x400")
+        self.configure(bg="#1e1e2f")
+
+        self.style = ttk.Style(self)
+        self.style.theme_use("clam")
+        self.style.configure("TLabel", foreground="#ffffff", background="#1e1e2f")
+        self.style.configure("TButton", background="#3e3e56", foreground="#ffffff")
+
+        self.setup_ui()
+
+    def setup_ui(self):
+        # UFW Status Frame
+        status_frame = ttk.LabelFrame(self, text="UFW Status", padding=10)
+        status_frame.pack(fill="x", padx=10, pady=10)
+
+        # Buttons for UFW Status
+        ttk.Button(status_frame, text="Enable UFW", command=self.enable_ufw).pack(side="left", padx=5, pady=5)
+        ttk.Button(status_frame, text="Disable UFW", command=self.disable_ufw).pack(side="left", padx=5, pady=5)
+        ttk.Button(status_frame, text="Check UFW Status", command=self.check_ufw_status).pack(side="left", padx=5, pady=5)
+        ttk.Button(status_frame, text="Show Raw Rules", command=self.show_raw_rules).pack(side="left", padx=5, pady=5)
+
+        # Clear Screen Button (placed below Show Raw Rules)
+        ttk.Button(status_frame, text="Clear Screen", command=self.clear_screen).pack(side="left", padx=5, pady=5)
+
+        # UFW Rules Frame
+        rules_frame = ttk.LabelFrame(self, text="UFW Rules", padding=10)
+        rules_frame.pack(fill="x", padx=10, pady=10)
+
+        ttk.Label(rules_frame, text="Port:").grid(row=0, column=0, padx=5, pady=5, sticky="w")
+        self.port_entry = ttk.Entry(rules_frame, width=10)
+        self.port_entry.grid(row=0, column=1, padx=5, pady=5)
+
+        ttk.Label(rules_frame, text="Protocol:").grid(row=0, column=2, padx=5, pady=5, sticky="w")
+        self.protocol_var = tk.StringVar(value="tcp")  # Default protocol is TCP
+        ttk.Radiobutton(rules_frame, text="TCP", variable=self.protocol_var, value="tcp").grid(row=0, column=3, padx=5, pady=5, sticky="w")
+        ttk.Radiobutton(rules_frame, text="UDP", variable=self.protocol_var, value="udp").grid(row=0, column=4, padx=5, pady=5, sticky="w")
+
+        ttk.Button(rules_frame, text="Allow Port", command=self.allow_port).grid(row=1, column=0, columnspan=2, padx=5, pady=5)
+        ttk.Button(rules_frame, text="Deny Port", command=self.deny_port).grid(row=1, column=2, columnspan=2, padx=5, pady=5)
+
+        # Output Text
+        self.output_text = tk.Text(self, wrap="word", height=15, bg="#1e1e2f", fg="#00ff7f", font=("Courier", 12))
+        self.output_text.pack(pady=10, fill="both", expand=True)
+
+    def run_command(self, command):
+        """Run a shell command and return the output."""
+        try:
+            result = subprocess.run(command, capture_output=True, text=True, shell=True)
+            if result.returncode == 0:
+                return result.stdout
+            else:
+                return result.stderr
+        except Exception as e:
+            return f"Error: {e}"
+
+    def enable_ufw(self):
+        """Enable UFW."""
+        output = self.run_command("sudo ufw enable")
+        self.output_text.insert(tk.END, f"Enabling UFW...\n{output}\n")
+
+    def disable_ufw(self):
+        """Disable UFW."""
+        output = self.run_command("sudo ufw disable")
+        self.output_text.insert(tk.END, f"Disabling UFW...\n{output}\n")
+
+    def check_ufw_status(self):
+        """Check UFW status."""
+        output = self.run_command("sudo ufw status verbose")
+        self.output_text.insert(tk.END, f"UFW Status:\n{output}\n")
+
+    def allow_port(self):
+        """Allow a specific port."""
+        port = self.port_entry.get()
+        protocol = self.protocol_var.get()
+        if not port:
+            self.output_text.insert(tk.END, "Error: Port is required.\n")
+            return
+
+        output = self.run_command(f"sudo ufw allow {port}/{protocol}")
+        self.output_text.insert(tk.END, f"Allowing port {port}/{protocol}...\n{output}\n")
+        insert_ufw_rule("allow", port, protocol)
+
+    def deny_port(self):
+        """Deny a specific port."""
+        port = self.port_entry.get()
+        protocol = self.protocol_var.get()
+        if not port:
+            self.output_text.insert(tk.END, "Error: Port is required.\n")
+            return
+
+        output = self.run_command(f"sudo ufw deny {port}/{protocol}")
+        self.output_text.insert(tk.END, f"Denying port {port}/{protocol}...\n{output}\n")
+
+    def show_raw_rules(self):
+        """Show raw iptables rules managed by UFW."""
+        output = self.run_command("sudo ufw show raw")
+        self.output_text.insert(tk.END, f"Raw UFW Rules:\n{output}\n")
+
+    def clear_screen(self):
+        """Clear the output text area."""
+        self.output_text.config(state="normal")
+        self.output_text.delete("1.0", tk.END)
+        self.output_text.config(state="disabled")
 
 if __name__ == "__main__":
     app = NetworkScanner()
