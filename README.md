@@ -81,4 +81,3 @@ MIT License. See [LICENSE](LICENSE).
 
 --- 
 
-**Happy (ethical) hacking!** 🔍  
